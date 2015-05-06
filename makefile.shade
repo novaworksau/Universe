@@ -239,7 +239,7 @@ var buildTarget = "compile"
             GitCommand(repo, string.Format("checkout {0}", branch));
 
             // Process project.json files to pin version numbers
-                // Replace version in project.json
+            // Replace version in project.json
             foreach(var file in Directory.GetFiles(repo,"project.json",SearchOption.AllDirectories))
             {
                 var builder = new StringBuilder();
