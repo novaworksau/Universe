@@ -7,6 +7,7 @@ use namespace='System.IO'
 use namespace='System.Collections.Generic'
 use namespace='System.Net'
 use namespace='System.Linq'
+use namespace='System.Text'
 use namespace='System.Text.RegularExpressions'
 use namespace='System.Threading.Tasks'
 use import="BuildEnv"
@@ -203,12 +204,82 @@ var buildTarget = "compile"
             CloneOrUpdate(repo);
 
             GitCommand(repo, "checkout origin/release -B master");
-            File.Copy(Path.Combine("build-template", "NuGet.master.config"),
+
+            if(File.Exists(Path.Combine(repo, "NuGet.config")))
+            {
+                File.Copy(Path.Combine("build-template", "NuGet.master.config"),
                       Path.Combine(repo, "NuGet.config"),
                       overwrite: true);
-            GitCommand(repo, "commit -am \"Updating NuGet.config\"");
+                GitCommand(repo, "commit -am \"Updating NuGet.config\"");
+            }
 
             GitCommand(repo, "push origin master:master -f");
+        }
+    }
+
+#pin-version
+    @{
+        // NOTE: Before running update the below monikers as needed
+        // TODO: Should these be taken from environmental variable ?
+        var branch = "master";
+        var oldPreRelease = "";
+        var newPreRelease = "";
+        var excludeReposForJson = new[]
+            {
+              "Coherence",
+              "Coherence-Signed",
+              "dnvm",
+              "Entropy"
+            };
+
+        foreach (var repo in GetAllRepos().Except(excludeReposForJson))
+        {
+            CloneOrUpdate(repo);
+
+            GitCommand(repo, string.Format("checkout {0}", branch));
+
+            // Process project.json files to pin version numbers
+                // Replace version in project.json
+            foreach(var file in Directory.GetFiles(repo,"project.json",SearchOption.AllDirectories))
+            {
+                var builder = new StringBuilder();
+                var contents = File.ReadAllLines(file);
+
+                foreach(var jsonEntry in contents)
+                {
+                    if(!jsonEntry.Contains("\"System."))
+                    {
+                        var oldSearchExp = string.IsNullOrEmpty(oldPreRelease) ? "0.0-*" : string.Format("0.0-{0}-*" , oldPreRelease);
+                        var newReplaceExp = string.IsNullOrEmpty(newPreRelease) ? "0.0-*" : string.Format("0.0-{0}-*" , newPreRelease);
+
+                        var newEntry = ProcessExcludesForPackages(jsonEntry);
+
+                        builder.AppendLine(newEntry.Replace(oldSearchExp, newReplaceExp));
+                    }
+                    else
+                    {
+                        builder.AppendLine(jsonEntry);
+                    }
+                }
+
+                File.WriteAllText(file,builder.ToString());
+            }
+
+            // Build projects to produce project.lock.json
+            Exec("build.cmd", "compile", repo);
+
+           // Replace lock=true in project.lock.json
+            foreach(var file in Directory.GetFiles(repo,"project.lock.json",SearchOption.AllDirectories))
+            {
+                var contents = File.ReadAllText(file);
+                var newContents = contents.Replace("\"locked\": false", "\"locked\": true");
+                File.WriteAllText(file,newContents);
+            }
+
+            GitCommand(repo, "add -f *.json");
+            GitCommand(repo, "commit -am \"Updating json files to pin versions\""); 
+
+            GitCommand(repo, string.Format("push origin {0}:{0} -f", branch));
         }
     }
 
@@ -521,5 +592,13 @@ functions
                         .Replace("\r", "|r")
                         .Replace("\n", "|n")
                         .Replace("]", "|]");
+        }
+
+        string ProcessExcludesForPackages(string jsonEntry)
+        {
+            var newEntry = jsonEntry.Replace("Microsoft.Net.Http.Client\": \"1.0.0-*\"", "Microsoft.Net.Http.Client\": \"1.0.0-beta3-*\"");
+            newEntry = newEntry.Replace("Microsoft.AspNet.HttpFeature\": { \"version\": \"1.0.0-*\"", "Microsoft.AspNet.HttpFeature\": { \"version\": \"1.0.0-beta2-*\"");
+
+            return newEntry;
         }
     }
