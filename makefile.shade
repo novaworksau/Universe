@@ -222,6 +222,8 @@ var buildTarget = "compile"
         // NOTE: Before running update the below monikers as needed
         // TODO: Should these be taken from environmental variable ?
         var branch = "master";
+        var stableBranches = new[] {"master"};
+
         var oldPreRelease = "";
         var newPreRelease = "";
         var excludeReposForJson = new[]
@@ -238,6 +240,14 @@ var buildTarget = "compile"
 
             GitCommand(repo, string.Format("checkout {0}", branch));
 
+            if(File.Exists(Path.Combine(repo, "build.cmd")))
+            {
+                File.Copy(Path.Combine("build-template", "build.cmd"),
+                      Path.Combine(repo, "build.cmd"),
+                      overwrite: true);
+                GitCommand(repo, "commit -am \"Updating build.cmd to pin KoreBuild and DNX\"");
+            }
+
             // Process project.json files to pin version numbers
             // Replace version in project.json
             foreach(var file in Directory.GetFiles(repo,"project.json",SearchOption.AllDirectories))
@@ -250,7 +260,8 @@ var buildTarget = "compile"
                     if(!jsonEntry.Contains("\"System."))
                     {
                         var oldSearchExp = string.IsNullOrEmpty(oldPreRelease) ? "0.0-*" : string.Format("0.0-{0}-*" , oldPreRelease);
-                        var newReplaceExp = string.IsNullOrEmpty(newPreRelease) ? "0.0-*" : string.Format("0.0-{0}-*" , newPreRelease);
+                        var newReplaceExp = string.IsNullOrEmpty(newPreRelease) ? "0.0-*" : string.Format("0.0-{0}" , newPreRelease);
+                        newReplaceExp = stableBranches.Contains(branch) ? newReplaceExp : newReplaceExp + "-*";
 
                         var newEntry = ProcessExcludesForPackages(jsonEntry);
 
@@ -268,7 +279,7 @@ var buildTarget = "compile"
             // Build projects to produce project.lock.json
             Exec("build.cmd", "compile", repo);
 
-           // Replace lock=true in project.lock.json
+            // Replace lock=true in project.lock.json
             foreach(var file in Directory.GetFiles(repo,"project.lock.json",SearchOption.AllDirectories))
             {
                 var contents = File.ReadAllText(file);
