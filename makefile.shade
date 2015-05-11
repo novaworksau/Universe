@@ -287,12 +287,20 @@ var buildTarget = "compile"
                 File.WriteAllText(file,newContents);
             }
 
-            GitCommand(repo, "add -f *.json");
+           foreach(var file in Directory.GetFiles(repo,"project*",SearchOption.AllDirectories))
+            {
+                if(ShouldIncludeProjectJson(file))
+                {
+                    GitCommand(repo, string.Format("add -f {0}",file.Substring(file.IndexOf(repo) + repo.Length + 1)));
+                }
+            } 
+
             GitCommand(repo, "commit -am \"Updating json files to pin versions\""); 
 
             GitCommand(repo, string.Format("push origin {0}:{0} -f", branch));
         }
     }
+
 
 #only-compile target='compile'
     @{
@@ -611,5 +619,21 @@ functions
             newEntry = newEntry.Replace("Microsoft.AspNet.HttpFeature\": { \"version\": \"1.0.0-*\"", "Microsoft.AspNet.HttpFeature\": { \"version\": \"1.0.0-beta2-*\"");
 
             return newEntry;
+        }
+
+        bool ShouldIncludeProjectJson(string jsonPath)
+        {
+            if(!jsonPath.Contains("src") && !jsonPath.Contains("test"))
+            {
+                return false;
+            }
+
+            if(jsonPath.Contains("bin") || jsonPath.Contains("Debug")
+             || jsonPath.Contains("artifacts") || jsonPath.Contains("node_modules") || !jsonPath.Contains(".json"))
+            {
+                return false;
+            }
+
+            return true;
         }
     }
