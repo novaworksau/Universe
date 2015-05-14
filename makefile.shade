@@ -218,14 +218,14 @@ var buildTarget = "compile"
     }
 
 #pin-version
+    -// Pin versions of packages in project.json and updated project.lock.json
     @{
         // NOTE: Before running update the below monikers as needed
-        // TODO: Should these be taken from environmental variable ?
-        var branch = "master";
+        var branch = Environment.GetEnvironmentVariable("NEW_BUILD_BRANCH");
         var stableBranches = new[] {"master"};
 
-        var oldPreRelease = "";
-        var newPreRelease = "";
+        var oldPreRelease = Environment.GetEnvironmentVariable("OLD_RELEASE");
+        var newPreRelease = Environment.GetEnvironmentVariable("NEW_RELEASE");
         var excludeReposForJson = new[]
             {
               "Coherence",
@@ -233,6 +233,13 @@ var buildTarget = "compile"
               "dnvm",
               "Entropy"
             };
+
+        var coreCLRBuild = Environment.GetEnvironmentVariable("CORECLR_RELEASE_BUILD");
+        var oldCoreCLRPrerelease = Environment.GetEnvironmentVariable("OLD_CORECLR_RELEASE");
+        var newCoreCLRPrerelease = Environment.GetEnvironmentVariable("NEW_CORECLR_RELEASE");
+
+        var oldRoslynPrerelease = Environment.GetEnvironmentVariable("OLD_ROSLYN_RELEASE");
+        var newRoslynPrerelease = Environment.GetEnvironmentVariable("NEW_ROSLYN_RELEASE");
 
         foreach (var repo in GetAllRepos().Except(excludeReposForJson))
         {
@@ -245,31 +252,47 @@ var buildTarget = "compile"
                 File.Copy(Path.Combine("build-template", "build.cmd"),
                       Path.Combine(repo, "build.cmd"),
                       overwrite: true);
-                GitCommand(repo, "commit -am \"Updating build.cmd to pin KoreBuild and DNX\"");
             }
 
             // Process project.json files to pin version numbers
             // Replace version in project.json
-            foreach(var file in Directory.GetFiles(repo,"project.json",SearchOption.AllDirectories))
+            foreach(var file in Directory.GetFiles(repo,"project.json", SearchOption.AllDirectories))
             {
                 var builder = new StringBuilder();
                 var contents = File.ReadAllLines(file);
 
                 foreach(var jsonEntry in contents)
                 {
-                    if(!jsonEntry.Contains("\"System."))
+                    if(jsonEntry.Contains("\"System.") || jsonEntry.Contains("CSharp"))
                     {
-                        var oldSearchExp = string.IsNullOrEmpty(oldPreRelease) ? "0.0-*" : string.Format("0.0-{0}-*" , oldPreRelease);
-                        var newReplaceExp = string.IsNullOrEmpty(newPreRelease) ? "0.0-*" : string.Format("0.0-{0}" , newPreRelease);
-                        newReplaceExp = stableBranches.Contains(branch) ? newReplaceExp : newReplaceExp + "-*";
+                        var oldSearchExp = string.IsNullOrEmpty(oldCoreCLRPrerelease) ? "-*" : string.Format("-{0}-*", oldCoreCLRPrerelease);
+                        var newReplaceExp = string.IsNullOrEmpty(newCoreCLRPrerelease) ? "-*" : 
+                                            stableBranches.Contains(branch) ? string.Format("-{0}-{1}", newCoreCLRPrerelease, coreCLRBuild) : string.Format("-{0}-*", newCoreCLRPrerelease);
 
-                        var newEntry = ProcessExcludesForPackages(jsonEntry);
+                        builder.AppendLine(jsonEntry.Replace(oldSearchExp, newReplaceExp));
+                    }
+                    else if(jsonEntry.Contains("CodeAnalysis."))
+                    {
+                        var oldSearchExp = string.IsNullOrEmpty(oldRoslynPrerelease) ? "-*" : string.Format("-{0}-*", oldRoslynPrerelease);
+                        var newReplaceExp = string.IsNullOrEmpty(newRoslynPrerelease) ? "-*" : 
+                                            stableBranches.Contains(branch) ? string.Format("-{0}", newRoslynPrerelease) : string.Format("-{0}-*", newRoslynPrerelease);
 
-                        builder.AppendLine(newEntry.Replace(oldSearchExp, newReplaceExp));
+                        builder.AppendLine(jsonEntry.Replace(oldSearchExp, newReplaceExp));
+                    }
+                    else if(jsonEntry.Contains("IdentityModel"))
+                    {
+                        // IdentityModel packages don't have a stable build and are updated very frequently on the NuGet feed
+                        builder.AppendLine(jsonEntry);
                     }
                     else
                     {
-                        builder.AppendLine(jsonEntry);
+                        var oldSearchExp = string.IsNullOrEmpty(oldPreRelease) ? "-*" : string.Format("-{0}-*", oldPreRelease);
+                        var newReplaceExp = string.IsNullOrEmpty(newPreRelease) ? "-*" : 
+                                            stableBranches.Contains(branch) ? string.Format("-{0}", newPreRelease) : string.Format("-{0}-*", newPreRelease);
+
+                        var newEntry = ProcessExcludesForPackages(jsonEntry, stableBranches.Contains(branch));
+
+                        builder.AppendLine(newEntry.Replace(oldSearchExp, newReplaceExp));
                     }
                 }
 
@@ -280,27 +303,76 @@ var buildTarget = "compile"
             Exec("build.cmd", "compile", repo);
 
             // Replace lock=true in project.lock.json
-            foreach(var file in Directory.GetFiles(repo,"project.lock.json",SearchOption.AllDirectories))
+            foreach(var file in Directory.GetFiles(repo, "project.lock.json", SearchOption.AllDirectories))
             {
                 var contents = File.ReadAllText(file);
                 var newContents = contents.Replace("\"locked\": false", "\"locked\": true");
-                File.WriteAllText(file,newContents);
+                File.WriteAllText(file, newContents);
             }
 
-           foreach(var file in Directory.GetFiles(repo,"project*",SearchOption.AllDirectories))
+            // Add the project.json and project.lock.json files
+            foreach(var file in Directory.GetFiles(repo, "project*", SearchOption.AllDirectories))
             {
-                if(ShouldIncludeProjectJson(file))
+                var gitFilePath = file.Substring(file.IndexOf(repo) + repo.Length + 1);
+
+                // Check if this needs to be included
+                if(ShouldIncludeProjectJson(gitFilePath))
                 {
-                    GitCommand(repo, string.Format("add -f {0}",file.Substring(file.IndexOf(repo) + repo.Length + 1)));
+                    GitCommand(repo, string.Format("add -f {0}", gitFilePath));
                 }
             } 
 
-            GitCommand(repo, "commit -am \"Updating json files to pin versions\""); 
+            GitCommand(repo, "commit -am \"Updating json files to pin versions and build.cmd to pin KoreBuild and DNX\""); 
 
             GitCommand(repo, string.Format("push origin {0}:{0} -f", branch));
         }
     }
 
+#update-prerelease-tags
+    @{
+        var newPreRelease = Environment.GetEnvironmentVariable("PRERELEASETAG");
+        if(string.IsNullOrEmpty(newPreRelease))
+        {
+            Log.Warn("No prerelease tag defined");
+            return;
+        }
+
+        var versionFile = "version.txt";
+
+        foreach (var repo in GetAllRepos())
+        {
+            CloneOrUpdate(repo);
+
+            GitCommand(repo, "checkout master");
+
+            GitCommand(repo, "pull --tags");
+
+            try
+            {
+                GitCommand(repo, string.Format("describe --tags > ..\\{0}", versionFile));
+            }
+            catch(Exception e)
+            {
+                Log.Info(string.Format("{0} repo not tagged. Skipping....", repo));
+                continue;
+            }
+
+            var version = File.ReadAllText(versionFile);
+            File.Delete(versionFile);
+
+            Log.Info(string.Format("Current version on repo {0} is {1}", repo, version));
+
+            var majorVersion = version.Split(new string[]{"-"}, StringSplitOptions.None)[0];
+
+            var newVersion = majorVersion + string.Format("-{0}", newPreRelease);
+
+            Log.Info(string.Format("New version for repo is {0}", newVersion));
+
+            GitCommand(repo, string.Format("tag -f -a {0} -m \"Tag for new release {0}\"", newVersion));
+
+            GitCommand(repo, "push -f --tags ");
+        }
+    }
 
 #only-compile target='compile'
     @{
@@ -613,21 +685,26 @@ functions
                         .Replace("]", "|]");
         }
 
-        string ProcessExcludesForPackages(string jsonEntry)
+        // Currently there are two packages that need to be special cased. 
+        // TODO: Revisit as this is changed in the near future.
+        string ProcessExcludesForPackages(string jsonEntry, bool stable=false)
         {
-            var newEntry = jsonEntry.Replace("Microsoft.Net.Http.Client\": \"1.0.0-*\"", "Microsoft.Net.Http.Client\": \"1.0.0-beta3-*\"");
-            newEntry = newEntry.Replace("Microsoft.AspNet.HttpFeature\": { \"version\": \"1.0.0-*\"", "Microsoft.AspNet.HttpFeature\": { \"version\": \"1.0.0-beta2-*\"");
+            var newEntry = jsonEntry.Replace("Microsoft.Net.Http.Client\": \"1.0.0-*\"", "Microsoft.Net.Http.Client\": \"1.0.0-beta3\"");
+            newEntry = newEntry.Replace("Microsoft.AspNet.HttpFeature\": { \"version\": \"1.0.0-*\"", "Microsoft.AspNet.HttpFeature\": { \"version\": \"1.0.0-beta2\"");
 
             return newEntry;
         }
 
+        // Verify if this is indeed the project.json or project.lock.json under project
         bool ShouldIncludeProjectJson(string jsonPath)
         {
-            if(!jsonPath.Contains("src") && !jsonPath.Contains("test"))
+            // Should be under src, test or samples folders
+            if(!jsonPath.StartsWith("src") && !jsonPath.StartsWith("test") && !jsonPath.StartsWith("samples"))
             {
                 return false;
             }
 
+            // Within the specified folders, few projects generate under build folders. They can be excluded
             if(jsonPath.Contains("bin") || jsonPath.Contains("Debug")
              || jsonPath.Contains("artifacts") || jsonPath.Contains("node_modules") || !jsonPath.Contains(".json"))
             {
