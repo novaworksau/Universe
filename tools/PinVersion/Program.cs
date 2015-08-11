@@ -90,16 +90,16 @@ namespace PinVersion
             }
 
             var buildCmdFile = buildCmdFiles[0];
-            var buildCmdFileContent = File.ReadAllText(buildCmdFile);
-            buildCmdFileContent = buildCmdFileContent.Replace(
-                "SET BUILDCMD_KOREBUILD_VERSION=\"\"",
-                $"SET BUILDCMD_KOREBUILD_VERSION={korebuildVersion}");
-            buildCmdFileContent = buildCmdFileContent.Replace(
-                "SET BUILDCMD_DNX_VERSION=\"\"",
-                $"SET BUILDCMD_DNX_VERSION={dnxPackage.Version.ToNormalizedString()}");
+            var allLines = File.ReadLines(buildCmdFile).ToList();
+
+            var index = allLines.FindIndex((line) => line.StartsWith("SET BUILDCMD_KOREBUILD_VERSION="));
+            allLines[index] = $"SET BUILDCMD_KOREBUILD_VERSION={korebuildVersion}";
+
+            index = allLines.FindIndex((line) => line.StartsWith("SET BUILDCMD_DNX_VERSION="));
+            allLines[index] = $"SET BUILDCMD_DNX_VERSION={dnxPackage.Version.ToNormalizedString()}";
 
             // Replace all content of the file
-            File.WriteAllText(buildCmdFile, buildCmdFileContent);
+            File.WriteAllLines(buildCmdFile, allLines);
         }
     }
 }
